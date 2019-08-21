@@ -11,49 +11,10 @@ from gnuradio.filter import firdes
 from optparse import OptionParser
 import osmosdr
 import time
+import traceback
 
-# https://eli.thegreenplace.net/2015/redirecting-all-kinds-of-stdout-in-python/
-from contextlib import contextmanager
-import ctypes
-import io
-import os, sys
-import tempfile
-
-libc = ctypes.CDLL(None)
-c_stderr = ctypes.c_void_p.in_dll(libc, 'stderr')
-
-@contextmanager
-def redirect_stderr(stream):
-    # The original fd stderr points to. Usually 1 on POSIX systems.
-    original_stderr_fd = sys.stderr.fileno()
-
-    def _redirect_stderr(to_fd):
-        """Redirect stderr to the given file descriptor."""
-        # Flush the C-level buffer stderr
-        libc.fflush(c_stderr)
-        # Flush and close sys.stderr - also closes the file descriptor (fd)
-        sys.stderr.close()
-        # Make original_stderr_fd point to the same file as to_fd
-        os.dup2(to_fd, original_stderr_fd)
-        # Create a new sys.stderr that points to the redirected fd
-        sys.stderr = io.TextIOWrapper(os.fdopen(original_stderr_fd, 'wb'))
-
-    # Save a copy of the original stderr fd in saved_stderr_fd
-    saved_stderr_fd = os.dup(original_stderr_fd)
-    try:
-        # Create a temporary file and redirect stderr to it
-        tfile = tempfile.TemporaryFile(mode='w+b')
-        _redirect_stderr(tfile.fileno())
-        # Yield to caller, then redirect stderr back to the saved fd
-        yield
-        _redirect_stderr(saved_stderr_fd)
-        # Copy contents of temporary file to the given stream
-        tfile.flush()
-        tfile.seek(0, io.SEEK_SET)
-        stream.write(tfile.read())
-    finally:
-        tfile.close()
-        os.close(saved_stderr_fd)
+import matplotlib.pyplot as plt
+from scipy.signal import find_peaks, peak_widths
 
 
 class scanner(gr.top_block):
@@ -89,6 +50,7 @@ class scanner(gr.top_block):
         self.rtlsdr_source_0.set_antenna('', 0)
         self.rtlsdr_source_0.set_bandwidth(bandwidth, 0)
 
+        self.raw_probe = blocks.probe_signal_c()
         self.fft_probe = blocks.probe_signal_vf(fft_bins)
         self.logpwrfft_x_0 = logpwrfft.logpwrfft_c(
         	sample_rate=sample_rate,
@@ -118,6 +80,9 @@ class scanner(gr.top_block):
         self.connect((self.logpwrfft_x_0, 0), (self.blocks_argmax_xx_0, 0))
         self.connect((self.logpwrfft_x_0, 0), (self.fft_probe, 0))
         self.connect((self.rtlsdr_source_0, 0), (self.logpwrfft_x_0, 0))
+
+    def get_output_raw(self):
+        return self.raw_probe.level()
 
     def get_output_fft(self):
         return self.fft_probe.level()
@@ -195,46 +160,65 @@ def main():
     parser.add_argument('stop_freq', type=int)
 
     parser.add_argument('-s', '--sample-rate', default=2400000)
-    parser.add_argument('-p', '--ppm', default=0)
-    parser.add_argument('-B', '--bin-size', default=100)
-    parser.add_argument('-b', '--bandwidth', default=100000)
-    parser.add_argument('-t', '--sample-time', type=float, default=0.2)
+    parser.add_argument('-p', '--ppm', type=float, default=0.0)
+    parser.add_argument('-B', '--bin-size', default=1000)
+    parser.add_argument('-b', '--bandwidth', default=2000000)
+    parser.add_argument('-t', '--sample-time', type=float, default=0.5)
+    parser.add_argument('-P', '--prominence', type=int, default=30)
+    parser.add_argument('-W', '--width', type=int, default=4000)
+    parser.add_argument('-D', '--db-threshold', type=int, default=-40)
     args = parser.parse_args()
 
     tb = scanner(**vars(args))
 
-    try:
-        # Suppress annoying gnuradio error messages
-        #new_stderr = open('/dev/null', 'w')
-        #new_stderr = io.BytesIO()
-        #with redirect_stderr(new_stderr):
-        # Loop from start to stop aiming the center frequency being scanned to 
-        # be bandwidth / 2 Hz above the start and below the stop
-        for freq_min in range(args.start_freq, args.stop_freq + 1, args.bandwidth):
-            if freq_min + args.bandwidth > args.stop_freq:
-                bandwidth = args.stop_freq - freq_min
-            else:
-                bandwidth = args.bandwidth
+    tb.start()
+    # The start frequency should be bandwidth/2 below the start so that the 
+    # start can get properly analyzed
+    start = args.start_freq - (args.bandwidth / 2)
+    stop = args.stop_freq + (args.bandwidth / 2)
+    for freq_min in range(start, stop, args.bandwidth / 2):
+        if freq_min + args.bandwidth > stop:
+            bandwidth = stop - freq_min
+        else:
+            bandwidth = args.bandwidth
 
-            freq = freq_min + (bandwidth / 2)
+        freq = freq_min + (bandwidth / 2)
 
-            tb.set_freq(freq)
-            tb.set_bandwidth(bandwidth)
-            tb.set_bandwidth(bandwidth)
+        tb.set_freq(freq)
+        tb.set_bandwidth(bandwidth)
+        tb.set_bandwidth(bandwidth)
 
-            tb.start()
-            time.sleep(args.sample_time)
-            tb.stop()
-            tb.wait()
+        time.sleep(args.sample_time)
 
-            output_fft_bin = tb.get_output_fft_bin()
-            output_freq = tb.get_output_freq()
-            output_fft = tb.get_output_fft()
+        #output_fft_bin = tb.get_output_fft_bin()
+        #output_freq = tb.get_output_freq()
+        output_fft = tb.get_output_fft()
 
-            print('{}: {}\t{}\t{}'.format(freq, output_fft_bin, output_freq, output_fft[output_fft_bin]))
-    except Exception as e:
-        #print(new_stderr.getvalue().decode('utf-8'))
-        raise e
+        # A prominence of 30 makes it easy to see the RDS side channels 
+        #peaks, _ = find_peaks(output_fft, prominence=30)
+        peaks, _= find_peaks(output_fft,
+                prominence=args.prominence, height=args.db_threshold,
+                width=args.width/args.bin_size)
+
+        print('{}:'.format(freq))
+        for peak in peaks:
+            output_freq = freq_min + (peak * args.bin_size)
+            print('\t{}:\t{} Hz\t{} db'.format(peak, output_freq, output_fft[peak]))
+
+        #if peaks:
+        #    results_half = peak_widths(output_fft, peaks, rel_height=0.5)
+        #    results_full = peak_widths(output_fft, peaks, rel_height=0.5)
+
+        #    plt.plot(output_fft)
+        #    plt.plot(peaks, [output_fft[i] for i in range(len(output_fft)) if i in peaks], "x")
+        #    plt.hlines(*results_half[1:], color="C2")
+        #    plt.hlines(*results_full[1:], color="C3")
+        #    plt.show()
+
+        #    while True: time.sleep(1.0)
+
+    tb.stop()
+    tb.wait()
 
 
 if __name__ == '__main__':

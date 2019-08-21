@@ -27,5 +27,5 @@ pybombs install gr-limesdr
 
 ```
 # Find frequencies with likely signals (still having stderr redirect issues)
-./scanner.py 87900000 107900000 2> /dev/null
+./scanner.py 85000000 107900000
 ```
