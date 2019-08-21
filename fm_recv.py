@@ -19,7 +19,7 @@ def main():
     parser = argparse.ArgumentParser(prog='pyfm', description='fm tuner with gnuradio and rtl-sdr')
     parser.add_argument('-s', '--sample-rate', default=2400000)
     parser.add_argument('-p', '--ppm', default=0)
-    parser.add_argument('-f', '--freq', required=True)
+    parser.add_argument('freq', type=int)
     args = parser.parse_args()
 
     tb = gr.top_block()
@@ -29,7 +29,7 @@ def main():
     ##################################################
     rtlsdr_source_0 = osmosdr.source(args="numchan=1")
     rtlsdr_source_0.set_sample_rate(args.sample_rate)
-    rtlsdr_source_0.set_center_freq(float(args.freq), 0)
+    rtlsdr_source_0.set_center_freq(args.freq, 0)
     rtlsdr_source_0.set_freq_corr(args.ppm, 0)
     rtlsdr_source_0.set_dc_offset_mode(2, 0)
     rtlsdr_source_0.set_iq_balance_mode(2, 0)
