@@ -7,7 +7,7 @@ pybombs auto-config
 pybombs recipes add-defaults
 pybombs prefix init ~/.local/gnuradio/ -a gnuradio -R gnuradio-default
 pybombs install rtl-sdr
-sudo cp src/rtl-sdr/rtl-sdr.rules /etc/udev/rules.d/
+sudo cp ~/.local/gnuradio/src/rtl-sdr/rtl-sdr.rules /etc/udev/rules.d/
 
 pybombs install gqrx gr-osmosdr gr-soapy
 ```
